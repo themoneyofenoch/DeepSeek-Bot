@@ -273,7 +273,7 @@ function BrowserView({ bot, tabId, leaving, landed, actions, useBrowserPages }) 
           ? h('div', { className: 'bt-browser-empty' },
               h(BotMark, { bot, size: 48, state: 'idle', live: true }),
               h('div', { className: 'bt-browser-empty-title' }, t("{name}'s browser", { name: bot.name })),
-              h('div', { className: 'bt-browser-empty-text' }, t('Open a page here and {name} can read it with you. Logins and cookies stay with {name}; other Bots never see them.', { name: bot.name })))
+              h('div', { className: 'bt-browser-empty-text' }, t('Open a page here and {name} can read it, and work it, with you. Every Bot shares one sign-in, so signing in once signs in all of them.', { name: bot.name })))
           : null))
 }
 

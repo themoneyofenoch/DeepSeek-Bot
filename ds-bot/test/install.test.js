@@ -139,11 +139,11 @@ const TEAM = {
   questions: {},
 }
 
-test('in the Desktop profile read_browser is the last tool and reads through the window', async (t) => {
+test('in the Desktop profile drive_browser is the last tool and the reader reads through the window', async (t) => {
   const { ctx, call, stop } = start(TEAM, { services: { profileContext: { name: 'desktop' } } })
   t.after(stop)
   const tools = ctx.calls.filter(entry => entry.startsWith('tool '))
-  assert.equal(tools.at(-1), 'tool read_browser')
+  assert.equal(tools.at(-1), 'tool drive_browser')
   assert.ok(ctx.calls.indexOf('effect ds-bot: browser channel') < ctx.calls.indexOf('effect ds-bot: api route'))
   const read = args => ctx.registeredTools.get('read_browser').execute(args, { agent: { id: 'b2' } })
 
@@ -162,8 +162,36 @@ test('in the Desktop profile read_browser is the last tool and reads through the
   assert.equal((await call('state', {})).value.browser, true)
 })
 
+test('drive_browser drives the Bot browser, refuses submit-like controls, and reaches any window', async (t) => {
+  const { ctx, call, stop } = start(TEAM, { services: { profileContext: { name: 'desktop' } } })
+  t.after(stop)
+  const drive = args => ctx.registeredTools.get('drive_browser').execute(args, { agent: { id: 'b2' } })
+
+  // A click aimed at a control whose own words say submit never even leaves the host.
+  assert.match(await drive({ action: 'click', text: 'Submit 3 changes for review' }), /never taken automatically/)
+
+  // Driving reaches a window that has never shown this Bot: the action opens its first page.
+  const poll = call('browser-wait', { clientId: 'w1', open: {} })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const driving = drive({ action: 'open', url: 'https://example.com/' })
+  const requests = (await poll).value
+  assert.deepEqual(requests.map(request => [request.botId, request.action, request.url]), [['b2', 'open', 'https://example.com/']])
+  await call('browser-result', { id: requests[0].id, ok: true, page: { url: 'https://example.com/', title: 'Example', text: 'Hello from the page', items: [] } })
+  assert.match(await driving, /^Done: open\./)
+  assert.match(await driving, /Hello from the page/)
+
+  // A refusal made inside the page comes back as a refusal, with the page's own words.
+  const again = call('browser-wait', { clientId: 'w1', open: { b2: { url: 'https://example.com/' } } })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const blocked = drive({ action: 'click', target: 2 })
+  const [second] = (await again).value
+  await call('browser-result', { id: second.id, ok: false, blocked: true, error: '"Publish" reads as an action only the user takes.' })
+  assert.match(await blocked, /never taken automatically/)
+})
+
 test('config.browser turns Bot browsers off even in the Desktop profile', (t) => {
   const { ctx, stop } = start(TEAM, { config: { browser: false }, services: { profileContext: { name: 'desktop' } } })
   t.after(stop)
   assert.ok(!ctx.calls.includes('tool read_browser'))
+  assert.ok(!ctx.calls.includes('tool drive_browser'))
 })

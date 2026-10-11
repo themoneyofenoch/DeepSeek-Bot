@@ -2,6 +2,11 @@
 // serialized with Function.prototype.toString: it must not use any name from this module
 // or any import, only its own locals and the page's globals.
 
+// Every numbered control is stamped with its `[#n]`, so `drive_browser` can press the very
+// element the Bot read instead of guessing at a fresh walk through a page that has moved.
+// The stamp is cleared at the start of each read: a number always means one live element.
+export const ITEM_ATTR = 'data-dshbot-item'
+
 export const READ_LIMITS = {
   chars: 400_000,
   nodes: 150_000,
@@ -11,6 +16,7 @@ export const READ_LIMITS = {
   tableRows: 5000,
   tableCols: 30,
   frameDepth: 3,
+  stamp: ITEM_ATTR,
 }
 
 /**
@@ -21,6 +27,9 @@ export const READ_LIMITS = {
  */
 export function readPage(limits) {
   const started = performance.now()
+  if (limits.stamp) {
+    for (const el of document.querySelectorAll(`[${limits.stamp}]`)) el.removeAttribute(limits.stamp)
+  }
   const SKIP = new Set(['script', 'style', 'noscript', 'template', 'head', 'title', 'meta', 'link', 'svg', 'object', 'embed', 'audio', 'video', 'source', 'track', 'map', 'datalist', 'option', 'optgroup'])
   const ITEM = 'a[href], button, input:not([type=hidden]), textarea, select, summary, [role=button], [role=link], [role=tab], [role=menuitem], [role=checkbox], [role=switch], [role=radio], [contenteditable=""], [contenteditable=true]'
   const ROLES = { a: 'link', button: 'button', select: 'select', textarea: 'textbox', summary: 'button' }
@@ -94,6 +103,7 @@ export function readPage(limits) {
     if (el.localName === 'select' && el.selectedOptions?.length) item.value = collapse([...el.selectedOptions].map(option => option.label || option.text).join(', ')).slice(0, 120)
     if (el.checked) item.checked = true
     if (el.disabled) item.disabled = true
+    if (limits.stamp) el.setAttribute(limits.stamp, String(items.length + 1))
     items.push(item)
     return { item, number: items.length, secret }
   }

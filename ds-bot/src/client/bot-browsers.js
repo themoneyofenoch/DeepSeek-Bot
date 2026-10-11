@@ -1,13 +1,15 @@
 // Bot browsers in the Desktop app: per Bot, a tab strip of pages. Each tab is one
-// Electron webview in the Bot's own storage partition (`dshDesktop.browser.acquire(
-// 'bot:<id>')` — the same key always yields the same partition, so cookies and logins
-// never cross Bots while a Bot may hold several pages). Moving a webview to another
+// Electron webview in the team's one storage partition (`dshDesktop.browser.acquire(
+// WORKSPACE)` — the same key always yields the same partition, so the whole team shares a
+// single signed-in jar, which the user signs into once, while every Bot still keeps its own
+// pages). Moving a webview to another
 // parent reloads its guest, so every webview lives in one body-level layer for its
 // whole life: the panel reports a rectangle, the shown tab's webview is placed over
 // it, and the others stay at the same size (their layout, and so what a read sees,
 // stays the same) but hidden.
 
 import { READ_PAGE_SCRIPT } from './read-page.js'
+import { clickScript, scrollScript, typeScript } from './drive.js'
 import { STORAGE } from './storage.js'
 
 export { READ_PAGE_SCRIPT }
@@ -20,6 +22,14 @@ const MAX_LIVE = 6
 const READ_TIMEOUT_MS = 10_000
 const PREVIEW_TIMEOUT_MS = 3000
 const RESIZE_LATER_MS = 200
+// One partition for the whole team: the Desktop hands a partition out per workspace key, so
+// the same key is always the same cookie jar. Shared on purpose — the user signs in to
+// Google and Apple once inside this browser and every Bot is already signed in.
+const WORKSPACE = 'bot:team'
+// How long to wait for a page a Bot asked for, and how long to let a click or a keypress
+// settle (a click can navigate) before the read that answers it.
+const READY_MS = 8000
+const SETTLE_MS = 200
 const SEARCH_URL = 'https://www.bing.com/search?q='
 // The drawer cards preview a page by its own words: its description, else its first
 // real paragraph. Webview capturePage() is not used: on Windows a failed capture
@@ -170,7 +180,7 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
 
   async function create(tabId) {
     const botId = owner.get(tabId)
-    const reservation = await bridge.acquire(`bot:${botId}`)
+    const reservation = await bridge.acquire(WORKSPACE)
     if (disposed) { await bridge.release(reservation.lease).catch(() => {}); return undefined }
     const element = doc.createElement('webview')
     // The shell forwards app shortcuts from a focused webview that carries these
@@ -442,6 +452,61 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
         clearTimeout(timer)
       }
     },
+    /**
+     * Do something in a Bot's browser — open a page, press a control, type into a field,
+     * scroll, or step through history — and answer with the page it produced. A Bot with no
+     * page yet gets one here, so driving never waits for the panel to be open on screen.
+     * @param {string} botId
+     * @param {{action: string, url?: string, number?: number, text?: string, value?: string, enter?: boolean, amount?: number}} request
+     */
+    async drive(botId, request) {
+      ensureTabs(botId)
+      let tabId = activeTab(botId)
+      if (tabId === null) tabId = openTab(botId, '')
+      const entry = await open(tabId)
+      if (entry === undefined) return { error: 'The Desktop browser could not open a page here.' }
+      const action = String(request.action ?? '')
+      if (action === 'open') {
+        const url = browserAddress(request.url)
+        if (url === null) return { error: 'Only http and https addresses open here.' }
+        if (blockedAddress(url)) return { error: BLOCKED }
+        if (!(await navigate(tabId, url))) return { error: 'That address did not open.' }
+        return { ok: true }
+      }
+      const until = Date.now() + READY_MS
+      while (!entry.ready && Date.now() < until) await sleep(100)
+      if (!entry.ready) return { error: 'The page did not finish opening.' }
+      const element = entry.element
+      const number = Number.isInteger(request.number) ? request.number : null
+      const text = String(request.text ?? '')
+      if (action === 'click') {
+        const outcome = await run(element, clickScript({ number, text }))
+        if (outcome?.ok !== true) return outcome ?? { error: 'The click did not run.' }
+      } else if (action === 'type') {
+        const outcome = await run(element, typeScript({ number, text, value: request.value, enter: request.enter === true }))
+        if (outcome?.ok !== true) return outcome ?? { error: 'The text did not go in.' }
+      } else if (action === 'scroll') {
+        const outcome = await run(element, scrollScript({ amount: request.amount }))
+        if (outcome?.ok !== true) return outcome ?? { error: 'The page did not scroll.' }
+      } else if (action === 'back') {
+        if (!element.canGoBack()) return { error: 'There is no page before this one.' }
+        element.goBack()
+      } else if (action === 'forward') {
+        if (!element.canGoForward()) return { error: 'There is no page after this one.' }
+        element.goForward()
+      } else if (action === 'reload') {
+        element.reload()
+      } else {
+        return { error: `There is no "${action}" action.` }
+      }
+      // The action may have started a navigation: let it settle, so the read that answers it
+      // shows the page the action produced rather than the one it left.
+      await sleep(SETTLE_MS)
+      const deadline = Date.now() + READY_MS
+      while (element.isLoading() && Date.now() < deadline) await sleep(150)
+      await sleep(SETTLE_MS)
+      return { ok: true }
+    },
     noteRead(botId) {
       const tabId = activeTab(botId)
       if (tabId) publish(tabId, { readAt: Date.now() })
@@ -467,9 +532,26 @@ export function createBotBrowsers({ bridge, createSource, storage = globalThis.l
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
- * Answers `read_browser` for this window: a long poll (`browser-wait`) reports which Bots
- * have a page open here and brings back read requests, each answered with
- * `browser-result`. A change in the open pages ends the poll so the host learns at once.
+ * Run one expression in a guest page and take its answer, never letting a page that has
+ * stopped answering hold the request open.
+ */
+const run = async (element, script) => {
+  let timer
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The page took too long to answer.')), READ_TIMEOUT_MS) })
+  try {
+    return await Promise.race([element.executeJavaScript(script), timeout])
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * Answers `read_browser` and `drive_browser` for this window: a long poll (`browser-wait`)
+ * reports which Bots have a page open here and brings back read or drive requests, each
+ * answered with `browser-result`. A change in the open pages ends the poll so the host
+ * learns at once.
  * @param {{ browsers: ReturnType<typeof createBotBrowsers>, post: (endpoint:string, payload:any, signal?:AbortSignal) => Promise<any>, clientId?: string, retryMs?: number }} options
  * @returns {() => void} stop
  */
@@ -481,11 +563,18 @@ export function serveBrowserReads({ browsers, post, clientId = globalThis.crypto
   // the moment it starts, so a resend during a slow read shares it, and a resend
   // after a failed submit posts the cached answer again.
   const answered = new Map()
-  const answer = async ({ id, botId }) => {
+  const answer = async ({ id, botId, action, ...request }) => {
     let job = answered.get(id)
     if (job === undefined) {
       job = (async () => {
         try {
+          if (typeof action === 'string' && action !== '' && action !== 'read') {
+            const outcome = await browsers.drive(botId, { ...request, action })
+            // The client refuses a control whose own name says submit, publish, buy or
+            // delete; the host refuses it too, one layer earlier.
+            if (outcome?.blocked === true) return { id, ok: false, blocked: true, error: `"${outcome.name ?? 'That control'}" reads as an action only the user takes.` }
+            if (outcome?.error) return { id, ok: false, error: outcome.error }
+          }
           const result = { id, ok: true, page: await browsers.read(botId) }
           browsers.noteRead(botId)
           return result

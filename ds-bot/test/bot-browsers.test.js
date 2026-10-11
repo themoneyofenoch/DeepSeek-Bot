@@ -38,7 +38,12 @@ function fakeWebview() {
     goBack() {}, goForward() {}, reload() { this.reloaded = true }, focus() { this.focused = true },
     async capturePage() { this.captured = true; return null },
     async loadURL(url) { this.loads.push(url); this.url = url; this.emit('did-navigate') },
-    async executeJavaScript() { return { url: this.url, title: this.getTitle(), text: 'hello', items: [] } },
+    async executeJavaScript(script) {
+      this.scripts = [...(this.scripts ?? []), script]
+      // A drive script is the one built by `drive.js`; everything else is the page reader.
+      if (script.trimStart().startsWith('(() => {')) return this.actionAnswer ?? { ok: true }
+      return { url: this.url, title: this.getTitle(), text: 'hello', items: [] }
+    },
   }
   return element
 }
@@ -68,7 +73,7 @@ function fakeDesktop() {
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const BOX = { left: 600, top: 90, width: 500, height: 700 }
 
-test('each Bot gets its own partition, and only the shown tab is visible', async () => {
+test('every Bot shares one team partition, and only the shown tab is visible', async () => {
   const desktop = fakeDesktop()
   const browsers = createBotBrowsers({ bridge: desktop.bridge, createSource, storage: desktop.storage, document: desktop.doc })
   const a = browsers.openTab('a')
@@ -76,8 +81,8 @@ test('each Bot gets its own partition, and only the shown tab is visible', async
   await browsers.show(a, BOX)
   await browsers.show(b, BOX)
   const [va, vb] = desktop.created
-  assert.equal(va.attributes.partition, 'persist:bot:a')
-  assert.equal(vb.attributes.partition, 'persist:bot:b')
+  assert.equal(va.attributes.partition, 'persist:bot:team')
+  assert.equal(vb.attributes.partition, 'persist:bot:team')
   // Agent mode withdraws the Bot styles; a guest must still stay out of the page flow.
   assert.equal(va.style.position, 'fixed')
   assert.equal(va.style.visibility, 'hidden')
@@ -202,9 +207,9 @@ test('a page that asks for a new window opens a new tab in the same Bot', async 
   const popped = state.ids[1]
   assert.equal(state.active, popped)
   await tick()
-  // The popup tab loads its address in the same Bot partition.
+  // The popup tab loads its address in the shared team partition.
   const guest = desktop.created.at(-1)
-  assert.equal(guest.attributes.partition, 'persist:bot:a')
+  assert.equal(guest.attributes.partition, 'persist:bot:team')
   guest.emit('dom-ready')
   assert.deepEqual(guest.loads, ['https://pop.example.com/'])
 })
@@ -368,4 +373,56 @@ test('browserAddress opens hosts over https, local addresses over http, and sear
 
 test('the page reader is one valid expression', () => {
   assert.doesNotThrow(() => new Function(`return ${READ_PAGE_SCRIPT}`))
+})
+
+test('driving acts in the active tab, by [#n] number or by the words on the control', async () => {
+  const desktop = fakeDesktop()
+  const browsers = createBotBrowsers({ bridge: desktop.bridge, createSource, storage: desktop.storage, document: desktop.doc })
+  const tab = browsers.openTab('a')
+  await browsers.show(tab, BOX)
+  const [view] = desktop.created
+  view.emit('dom-ready')
+  await tick()
+
+  await browsers.drive('a', { action: 'click', number: 3 })
+  assert.match(view.scripts.at(-1), /find\(3, ""\)/)
+
+  await browsers.drive('a', { action: 'type', text: 'Search', value: 'hello', enter: true })
+  const typed = view.scripts.at(-1)
+  assert.match(typed, /find\(null, "Search"\)/)
+  assert.match(typed, /const typing = "hello"/)
+  assert.match(typed, /const submitted = true/)
+
+  await browsers.drive('a', { action: 'scroll', amount: -400 })
+  assert.match(view.scripts.at(-1), /window\.scrollBy\(0, -400\)/)
+
+  await browsers.drive('a', { action: 'reload' })
+  assert.equal(view.reloaded, true)
+  assert.match((await browsers.drive('a', { action: 'back' })).error, /no page before/)
+
+  // A control whose own name reads as submit is refused inside the page, not pressed.
+  view.actionAnswer = { ok: false, blocked: true, name: 'Submit 3 changes for review' }
+  const refused = await browsers.drive('a', { action: 'click', text: 'Submit 3 changes for review' })
+  assert.equal(refused.blocked, true)
+  assert.equal(refused.name, 'Submit 3 changes for review')
+
+  // Only http and https open, exactly as the address bar has it.
+  assert.match((await browsers.drive('a', { action: 'open', url: 'file:///etc/passwd' })).error, /http and https/)
+  assert.match((await browsers.drive('a', { action: 'hover' })).error, /no "hover" action/)
+  browsers.dispose()
+})
+
+test('driving opens the first page for a Bot that was never shown', async () => {
+  const desktop = fakeDesktop()
+  const browsers = createBotBrowsers({ bridge: desktop.bridge, createSource, storage: desktop.storage, document: desktop.doc })
+  const outcome = await browsers.drive('a', { action: 'open', url: 'https://example.com/' })
+  assert.equal(outcome.ok, true)
+  assert.equal(desktop.created.length, 1)
+  assert.equal(browsers.tabs.getSnapshot().a.ids.length, 1)
+  // The page was asked for before the guest was ready, and loads the moment it is.
+  const view = desktop.created[0]
+  view.emit('dom-ready')
+  await tick()
+  assert.deepEqual(view.loads, ['https://example.com/'])
+  browsers.dispose()
 })

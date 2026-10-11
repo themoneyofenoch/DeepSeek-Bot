@@ -4,8 +4,14 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+### Added
+
+- Bots can work a page, not only read it: a new `drive_browser` tool opens a URL, presses a control, types into a field, scrolls, and goes back, forward or reloads. Controls are addressed by the `[#n]` numbers `read_browser` already prints, or by the words on them. A Bot reaches its own page even before the user has opened that Bot's browser panel.
+- Every Bot shares one browser sign-in: the user signs in to a site once in the browser panel and the whole team is signed in. Each Bot still keeps its own pages, and each still reads and drives only its own.
+
 ### Changed
 
+- A control whose own words read as submit, send for review, publish, buy, pay or delete is refused, both inside the page and on the server, and the Bot is told to ask the user to press it.
 - Every Bot can change its own name, role, color, model and instructions; only a Main Bot changes other Bots.
 
 ## [0.1.2] - 2026-10-11

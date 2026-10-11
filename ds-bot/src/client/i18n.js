@@ -546,7 +546,7 @@ const ZH = {
   'Search or enter address': '搜索或输入网址',
   'This page didn’t load': '页面没有加载出来',
   'Try again': '重试',
-  'Open a page here and {name} can read it with you. Logins and cookies stay with {name}; other Bots never see them.': '在这里打开网页，{name} 就能和你一起读。登录状态和 cookie 只属于 {name}，其他 Bot 看不到。',
+  'Open a page here and {name} can read it, and work it, with you. Every Bot shares one sign-in, so signing in once signs in all of them.': '在这里打开网页，{name} 就能和你一起读、一起操作。所有 Bot 共用一次登录，登录一次即可。',
   'Only http and https addresses open here.': '这里只能打开 http 和 https 地址。',
   'The page crashed.': '页面崩溃了。',
   'The browser blocked the new window.': '浏览器拦截了新窗口。',

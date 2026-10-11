@@ -71,7 +71,7 @@ function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrow
     return h('div', { className: 'bt-browser-empty-mark' },
       h(BotMark, { bot, size: 40, state: 'idle', live: true }),
       h('div', { className: 'bt-browser-empty-title' }, t("{name}'s browser", { name: bot.name })),
-      h('div', { className: 'bt-muted' }, t('Open a page here and {name} can read it with you. Logins and cookies stay with {name}; other Bots never see them.', { name: bot.name })),
+      h('div', { className: 'bt-muted' }, t('Open a page here and {name} can read it, and work it, with you. Every Bot shares one sign-in, so signing in once signs in all of them.', { name: bot.name })),
       h('button', { type: 'button', className: 'bt-browser-retry', onClick: () => actions.openBrowser(sessionId) }, t('Open browser')))
   }
   return h('div', { className: 'bt-bcards' },

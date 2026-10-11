@@ -141,3 +141,20 @@ test('partEnd prefers a blank line, then a line break, and cuts hard only withou
   assert.equal(partEnd('a\n' + 'b'.repeat(20), 0, 10), 10)
   assert.equal(partEnd('short', 0, 10), 5)
 })
+
+test('driving reaches a window that does not show the Bot, while a read still needs one that does', async () => {
+  const channel = createBrowserChannel({ waitMs: 5000 })
+  const polled = channel.wait('window-1', {})
+  // The window has never shown this Bot: a read is absent, driving is not.
+  assert.deepEqual(await channel.read('bot-a'), { absent: true })
+  const driven = channel.drive('bot-a', { action: 'open', url: 'https://example.com/' })
+  const [request] = await polled
+  assert.deepEqual(
+    { botId: request.botId, action: request.action, url: request.url },
+    { botId: 'bot-a', action: 'open', url: 'https://example.com/' },
+  )
+  // A refusal from the page keeps its own flag, so the tool can say why.
+  channel.result({ id: request.id, ok: false, blocked: true, error: '"Submit" reads as an action only the user takes.' })
+  assert.deepEqual(await driven, { error: '"Submit" reads as an action only the user takes.', blocked: true })
+  channel.dispose()
+})
